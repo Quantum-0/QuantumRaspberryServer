@@ -1,0 +1,127 @@
+<!doctype html>
+<html>
+<head>
+	<meta http-equiv="Content-type" content="text/html; charset=utf-8">
+	<meta http-equiv="X-UA-Compatible" content="IE=Edge">
+	<title>QRServer</title>
+	<link rel="stylesheet" type="text/css" href="static/style.css">
+	<link rel="stylesheet" href="http://fonts.googleapis.com/css?family=Oswald:400,300" type="text/css">
+
+	<!--[if lt IE 9]>
+	<script src="http://html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+	<![endif]-->
+	
+	
+	
+	
+	
+	<script language="JavaScript" type="text/javascript">
+    function shutdown()
+	{
+		if (confirm("Do you really want to shutdown Raspberry Pi?"))
+		{
+				var x = new XMLHttpRequest();
+				x.open("GET", "api/shutdown", true);
+				x.onload = function (){
+					//alert( x.responseText);
+				}
+				x.send(null);
+		}
+    }   
+
+	function reboot()
+	{
+		if (confirm("Do you really want to reboot Raspberry Pi?"))
+		{
+				var x = new XMLHttpRequest();
+				x.open("GET", "api/reboot", true);
+				x.onload = function (){
+					//alert( x.responseText);
+				}
+				x.send(null);
+		}
+    }   
+	</script>
+
+
+	
+	
+</head>
+<body>
+	<header>
+		<table>
+				<td id="logotd">
+					<div id="logo">
+					<a href="#"><img src="static/images/Pi.png" alt="Logo" width="80" height="80"></a>
+					</div>
+				</td>
+				<td>
+					<div id="title">
+					<h1><u> Quantum Raspberry Pi Server </u></h1>
+					</div>
+				</td>
+				<td align="right" width="36">
+					<div id="shutdownreboot">
+						<div id="headerbutton">
+							<a href="#" onClick=shutdown()>
+							<div id="ShutdownButton" alt="Shutdown"></div>
+							</a>
+						</div>
+						<div id="headerbutton">
+							<a href="#" onClick=reboot()>
+							<div id="RebootButton"  alt="Reboot"></div>
+							</a>
+						</div>
+					</div>
+				</td>
+		</table>
+	</header>
+	<div id="center">
+		<div id="content"></div>
+		<aside>
+			<nav>
+				<div id="menu-title"><h2 style="margin-top: 12px; margin-bottom: 12px">MENU</h2></div>
+				<hr>
+				<ul class="aside-menu">
+					<li><a href="panel/status" class="active">Status</li>
+					<li><a href="panel/bots">Bots</a></li>
+					<li><a href="panel/servers">Servers</a></li>
+					<li><a href="panel/motion">Motion</a></li>
+					<li><a href="panel/gpio">Gpio</a></li>
+					<li><a href="panel/system">System</a></li>
+				</ul>
+			</nav>
+		</aside>
+		
+		
+		<link rel="import" href="test.html">
+		
+		<section id="subcontent">
+		{% if name %}
+		  <iframe id="ifr" src="{{ name }}.html" align="left">Browser don't support iframes</iframe>
+		{% endif %}
+		</section>
+	</div>
+	<footer>
+		<table>
+			<td><div text-align="left">QRServer(с)2017</div></td>
+			<td align="center">Quantum Raspberry Pi Server Web Interface by Quantum0</td>
+			<td align="right">
+				<!-- ICONS FROM https://github.com/konsav/social-icons -->
+				<div id="social">
+					<a href="https://vk.com/id20108853"><img src="static/images/icons/vk.png"/></a>
+					<a href="https://github.com/Quantum-0"><img src="static/images/icons/gh.png"/></a>
+					<a href="http://www.furaffinity.net/user/quantum0/" height="0px"><img src="static/images/icons/fa.png"/></a>
+					<a href="https://www.youtube.com/channel/UCoE1dyWYUsSa3yiUMnqor0g"><img src="static/images/icons/yt.png"/></a>
+					<a href="https://telegram.me/Quantum0"><img src="static/images/icons/tg.png"/></a>
+					<a href="skype:quantum_0/?chat"><img src="static/images/icons/sk.png"/></a>
+					<!--
+					<a href="https://telegram.me/Quantum0"><img src="images/icons/in.png"/></a>
+					<a href="https://telegram.me/Quantum0"><img src="images/icons/fb.png"/></a>
+					-->
+				</div>
+			</td>
+		</table>
+	</footer>
+</body>
+</html>
