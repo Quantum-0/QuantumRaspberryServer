@@ -1,66 +1,195 @@
-from flask import Flask, render_template, request, redirect
+from flask import Flask, jsonify, abort, render_template, request, redirect
+import subprocess
 import os
 import psutil
 import socket
+import signal
 
 app = Flask(__name__)
 
+# ===================================== WEB INTERFACE =====================================
+
 # Корень
-@app.route('/')
-def index():
+@app.route('/test')
+def index_test():
 	return 'Привет, я малинка'
 
+# Favicon
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(os.path.join(app.root_path, 'static'),
+                               'favicon.ico', mimetype='image/vnd.microsoft.icon')	
+
+# Index
+@app.route('/')
+def index():
+	return render_template('index.html')
+	
+# Control Panel
+@app.route('/panel/<page>')
+def index_page(page):
+	return render_template('index.html', page=page)
+
+# ========================================== API ==========================================
+
+# Корень
+@app.route('/api')
+def index_api():
+	return 'Quantum Raspberry Server - API v0.1'
+	
+@app.errorhandler(404)
+def not_found(error):
+    return make_response(jsonify({'error': 'Not found'}), 404)
+
+# =================== Управление ботами ==================
+
+bots = [
+	{
+		'id': 0,
+		'name': 'Quantum Bot',
+		'path': '/home/pi/Autorun/Run/RaspberryUSBAndTelegram.exe',
+		'running': False,
+		'pid': -1
+	}
+	,
+	{
+		'id': 1,
+		'name': 'Shurya Chat Bot',
+		'path': '/home/pi/Autorun/Run/ShuryaChatBot.exe',
+		'running': False,
+		'pid': -1
+	}
+	,
+	{
+		'id': 2,
+		'name': 'Reminder Bot',
+		'path': '/home/pi/Autorun/Run/ReminderBot.exe',
+		'running': False,
+		'pid': -1
+	}
+]
+
+@app.route('/api/bots', methods=['GET'])
+def api_bots_list():
+	return jsonify({'Bots:': bots})
+
+@app.route('/api/bots/<int:bot_id>', methods=['GET'])
+def api_bot(bot_id):
+	bot = list(filter(lambda t: t['id'] == bot_id, bots))
+	if len(bot)==0:
+		abort(404)
+	return jsonify({'Bot': bot[0]})
+
+@app.route('/api/bots', methods=['POST'])
+def api_add_bot():
+	if not request.json or not 'path' in request.json:
+		abort(400)
+	bot = {
+		'id': bots[-1]['id'] + 1,
+		'name': request.json.get('name', ""),
+		'path': request.json['path'],
+		'running': False
+	}
+	bots.append(bot)
+	return jsonify({'bot': bot}), 201
+
+@app.route('/api/bots/<int:bot_id>', methods=['DELETE'])
+def delete_bot(bot_id):
+	bot = list(filter(lambda t: t['id'] == bot_id, bots))
+	if len(bot) == 0:
+		abort(404)
+	bots.remove(bot[0])
+	return jsonify({'result': True})
+
+@app.route('/api/bots/run/<int:bot_id>', methods=['GET'])
+def run_bot(bot_id):
+	bot = list(filter(lambda t: t['id'] == bot_id, bots))
+	if len(bot) == 0:
+		abort(404)
+	
+	if bot[0]['running']==True:
+		return jsonify({'result': False})
+	else:
+		bot[0]['running'] = True
+		with open(bot[0]['path'] + "stdout.txt","wb") as out, open(bot[0]['path'] + "stderr.txt","wb") as err:
+			subproc = subprocess.Popen(["mono", bot[0]['path']], stdout=out, stderr=err)
+			bot[0]['pid'] = subproc.pid
+		return jsonify({'result': True})
+
+@app.route('/api/bots/stop/<int:bot_id>', methods=['GET'])
+def stop_bot(bot_id):
+	bot = list(filter(lambda t: t['id'] == bot_id, bots))
+	if len(bot) == 0:
+		abort(404)
+	
+	if bot[0]['running']==False:
+		return jsonify({'result': False})
+	else:
+		#os.kill(bot[0]['pid'], signal.SIGTERM)
+		bot[0]['running']=False
+		return jsonify({'result': True})
+
+# =================== Матрица в DEV/TTY1 ==================
+
 # Запуск "матрицы" на подключённом экране
-@app.route('/matrix/<i>')
+@app.route('/api/matrix/<i>')
 def matrix(i):
-	if i=='1': # Если 1
+	if i=='1':
 		os.system('sudo cmatrix 1>/dev/tty1 &')
-	elif i=='0': # Если же 0
+	elif i=='0':
 		os.system('sudo killall cmatrix')
 		os.system('sudo clear > /dev/tty1')
 	else:
 		return 'Error'
 	return 'Done'
 
+# =================== Выключение и перезагрузка ==================
+
 # Выключение
-@app.route('/shutdown')
+@app.route('/api/shutdown')
 def shutdown():
 	os.system('sudo shutdown -h now &')
-	return 'Shutdowning Raspberry Pi..'
+	return jsonify({'result': True}) #'Shutdowning Raspberry Pi..'
 
 # Перезагрузка
-@app.route('/reboot')
+@app.route('/api/reboot')
 def reboot():
 	os.system('sudo reboot &')
-	return 'Rebooting Raspberry Pi..'
+	return jsonify({'result': True}) #'Rebooting Raspberry Pi..'
 
 # Запуск Spigot-сервера
-@app.route('/minecraft/spigot')
+@app.route('/api/minecraft/spigot')
 def spigot():
 	os.system('sudo java -Xms384M -Xmx740M -jar /home/minecraft/spigot-1.11.2.jar nogui')
 	return 'Done'
 
 # Запуск CraftBukkit-сервера
-@app.route('/minecraft/bukkit')
+@app.route('/api/minecraft/bukkit')
 def bukkit():
 	os.system('sudo java -Xms384M -Xmx740M -jar /home/minecraft/craftbukkit-1.11.2.jar nogui')
 	return 'Done'
 
 # Запуск Vanila-сервера с Forge
-@app.route('/minecraft/forge')
+@app.route('/api/minecraft/forge')
 def forge():
 	os.system('sudo java -Xms384M -Xmx740M -jar /home/minecraft/forge-1.11.2-13.20.0.2228-universal.jar nogui')
 	return 'Done'
 
 # Перезапуск ботов
-@app.route('/restart_bots')
+@app.route('/api/restart_bots')
 def restartbots():
 	os.system('sudo killall mono')
 	os.system('/home/pi/Autorun/Autorun.py')
 	return 'Done'
 
+# Перезапуск ботов
+@app.route('/api/stop_bots')
+def stopbots():
+	os.system('sudo killall mono')
+	return 'Done'
+
 # Статистика RAM
-@app.route('/memory/<val>')
+@app.route('/api/memory/<val>')
 def freemem(val):
 	p = psutil.virtual_memory()
 	if val=='free':
@@ -73,54 +202,57 @@ def freemem(val):
 		return '?'
 
 # Текущая температура процессора
-@app.route('/cpu_temp')
+@app.route('/api/cpu_temp')
 def cputemp():
 	return getCPUtemperature()
 
 # Статистика использования процессора
-@app.route('/cpu')
+@app.route('/api/cpu')
 def cpuusage():
 	return str(psutil.cpu_percent(interval=1))
 
 # Запуск сервиса motion
-@app.route('/motion/start')
+@app.route('/api/motion/start')
 def startmotion():
 	os.system('sudo service motion start &')
 	return redirect(request.url[:request.url.index('5000')] + '8081/', code=302)
 
 # Остановка сервиса motion
-@app.route('/motion/stop')
+@app.route('/api/motion/stop')
 def stopmotion():
 	os.system('sudo service motion stop')
 	return 'Stopped'
 
 # Проверка текущего состояния сервиса motion
-@app.route('/motion')
+@app.route('/api/motion')
 def statusmotion():
-	#os.system('sudo service motion stop')
-	return ''
+	output = subprocess.check_output(["service", "sshd", "status"], stderr=subprocess.STDOUT)
+	if 'inactive (dead)' in output:
+		return 'False'
+	else:
+		return 'True'
 
 # Запуск стриминга на Picarto
-@app.route('/stream/picarto')
+@app.route('/api/stream/picarto')
 def picarto_stream():
 	os.system('ffmpeg -f v4l2 -framerate 20 -video_size 640x480 -i /dev/video0 -c:v libx264 -b:v 500k -maxrate 500k -bufsize 500k -an -f flv rtmp://live.us.picarto.tv/golive/...')
 	return 'Stream started'
 
 # Запуск стриминга на YouTube
-@app.route('/stream/youtube')
+@app.route('/api/stream/youtube')
 def youtube_stream():
 	os.system('ffmpeg -ar 44100 -ac 2 -acodec pcm_s16le -f s16le -ac 2 -i /dev/zero -f v4l2 -c:a aac -framerate 5 -video_size 640x480 -i /dev/video0 -c:v libx264 -b:v 200k -maxrate 200k -bufsize 200k -vcodec h264 -g 60 -strict experimental -f flv rtmp://a.rtmp.youtube.com/live2/...')
 	return 'Stream started'
 
 # update системы
-@app.route('/update')
+@app.route('/api/update')
 def update():
 	os.system('sudo killall cmatrix')
 	os.system('sudo apt-get update & > /dev/tty1')
 	return 'Updating..'
 
 # upgrade системы
-@app.route('/upgrade')
+@app.route('/api/upgrade')
 def upgrate():
 	os.system('sudo killall cmatrix')
 	os.system('sudo apt-get upgrade & > /dev/tty1')
@@ -137,4 +269,4 @@ def getCPUtemperature():
 
 
 if __name__ == '__main__':
-	app.run(debug=True, host='0.0.0.0', port = 5000)
+	app.run(debug=True, host='0.0.0.0', port = 5000) #port for testing
