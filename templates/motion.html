@@ -1,0 +1,44 @@
+<html>
+<head>
+	<script language="JavaScript" type="text/javascript">
+	
+	function refresh_motion()
+	{
+		var iframe = document.getElementById('streaming');
+		iframe.src = iframe.src;
+	}
+	
+    function start_motion()
+	{
+		var x = new XMLHttpRequest();
+		x.open("GET", "/api/motion/start", true);
+		x.onload = function ()
+		{
+			alert("Motion started");
+			refresh_motion()
+		}
+		x.send(null);
+    }   
+
+	function stop_motion()
+	{
+		var x = new XMLHttpRequest();
+		x.open("GET", "/api/motion/stop", true);
+		x.onload = function ()
+		{
+			//alert("Motion stopped");
+			refresh_motion()
+		}
+		x.send(null);
+    }   
+	</script>
+</head>
+<body>
+	<h1>Motion</h1>
+	<hr>
+	<a href="#" onClick=start_motion()>[Start]</a>
+	<a href="#" onClick=stop_motion()>[Stop]</a>
+	<hr>
+	<iframe id="streaming" src="http://192.168.1.101:8081" width="640" height="480"/>
+</body>
+</html>

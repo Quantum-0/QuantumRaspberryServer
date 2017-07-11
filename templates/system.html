@@ -1,0 +1,40 @@
+<html>
+<head>	
+		<script language="JavaScript" type="text/javascript">
+    function shutdown()
+	{
+		if (confirm("Do you really want to shutdown Raspberry Pi?"))
+		{
+				var x = new XMLHttpRequest();
+				x.open("GET", "api/shutdown", true);
+				x.onload = function (){
+					//alert( x.responseText);
+				}
+				x.send(null);
+		}
+    }   
+
+	function reboot()
+	{
+		if (confirm("Do you really want to reboot Raspberry Pi?"))
+		{
+				var x = new XMLHttpRequest();
+				x.open("GET", "api/reboot", true);
+				x.onload = function (){
+					//alert( x.responseText);
+				}
+				x.send(null);
+		}
+    }   
+	</script>
+</head>
+<body>
+	<h1>System</h1>
+	<hr>
+	<a href="#" onClick=shutdown()>- Shutdown -</a>
+	<a href="#" onClick=reboot()>- Reboot -</a>
+	<hr>
+	<a href="#" onClick=update()>- Update -</a>
+	<a href="#" onClick=upgrade()>- Upgrade -</a>
+</body>
+</html>

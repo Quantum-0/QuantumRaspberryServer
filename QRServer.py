@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, abort, render_template, request, redirect
+from flask import Flask, jsonify, abort, render_template, request, redirect, url_for
 import subprocess
 import os
 import psutil
@@ -23,13 +23,17 @@ def favicon():
 # Index
 @app.route('/')
 def index():
-	return render_template('index.html')
+	return redirect('/panel/status')
 	
 # Control Panel
 @app.route('/panel/<page>')
 def index_page(page):
 	return render_template('index.html', page=page)
-
+	
+# Panel content
+@app.route('/panel_get_content/<page>')
+def get_content_for_control_panel(page):
+	return render_template(page + '.html')
 # ========================================== API ==========================================
 
 # Корень
@@ -190,7 +194,7 @@ def stopbots():
 
 # Статистика RAM
 @app.route('/api/memory/<val>')
-def freemem(val):
+def meminfo(val):
 	p = psutil.virtual_memory()
 	if val=='free':
 		return str(100-p.percent)
