@@ -4,6 +4,7 @@ import os
 import psutil
 import socket
 import signal
+import RPi.GPIO as GPIO
 
 app = Flask(__name__)
 
@@ -34,6 +35,7 @@ def index_page(page):
 @app.route('/panel_get_content/<page>')
 def get_content_for_control_panel(page):
 	return render_template(page + '.html')
+
 # ========================================== API ==========================================
 
 # Корень
@@ -41,10 +43,6 @@ def get_content_for_control_panel(page):
 def index_api():
 	return 'Quantum Raspberry Server - API v0.1'
 	
-@app.errorhandler(404)
-def not_found(error):
-    return make_response(jsonify({'error': 'Not found'}), 404)
-
 # =================== Управление ботами ==================
 
 bots = [
@@ -75,14 +73,14 @@ bots = [
 
 @app.route('/api/bots', methods=['GET'])
 def api_bots_list():
-	return jsonify({'Bots:': bots})
+	return jsonify({'bots': bots})
 
 @app.route('/api/bots/<int:bot_id>', methods=['GET'])
 def api_bot(bot_id):
 	bot = list(filter(lambda t: t['id'] == bot_id, bots))
 	if len(bot)==0:
 		abort(404)
-	return jsonify({'Bot': bot[0]})
+	return jsonify({'bot': bot[0]})
 
 @app.route('/api/bots', methods=['POST'])
 def api_add_bot():
@@ -92,6 +90,7 @@ def api_add_bot():
 		'id': bots[-1]['id'] + 1,
 		'name': request.json.get('name', ""),
 		'path': request.json['path'],
+		'pid': -1,
 		'running': False
 	}
 	bots.append(bot)
@@ -129,6 +128,7 @@ def stop_bot(bot_id):
 	if bot[0]['running']==False:
 		return jsonify({'result': False})
 	else:
+		os.system('sudo kill ' + str(bot[0]['pid']))
 		#os.kill(bot[0]['pid'], signal.SIGTERM)
 		bot[0]['running']=False
 		return jsonify({'result': True})
@@ -160,6 +160,73 @@ def shutdown():
 def reboot():
 	os.system('sudo reboot &')
 	return jsonify({'result': True}) #'Rebooting Raspberry Pi..'
+
+# =========================== GPIO ===========================
+
+# GPIO Setup
+@app.route('/api/gpio/<int:channel>', methods=['POST'])
+def gpiosetup(channel):
+	if not request.json or not 'Direction' in request.json or not 'Resistor' in request.json or not 'Value' in request.json:
+		abort(400)
+	
+	# GPIO.OUT = 0; GPIO.IN = 1
+	# GPIO.PUD_OFF = 20; GPIO.PUD_DOWN = 21; GPIO.PUD_UP = 22
+	dir = request.json['Direction']
+	pull = request.json['Resistor']
+	val = request.json['Value']
+	
+	print(dir)
+	print(pull)
+	print(val)
+	
+	if (dir == -1):
+		abort(400)
+		
+	if (dir == GPIO.OUT):
+		if (pull != GPIO.PUD_OFF and pull != -1):
+			abort(400)
+		
+	if (pull == -1):
+		GPIO.setup(channel, dir)
+	else:
+		GPIO.setup(channel, dir, pull)
+		
+	if (dir == GPIO.OUT and val != -1):
+		GPIO.output(channel, val)
+		
+	result = {
+		'Channel': channel,
+		'Direction': dir,
+		'Resistor': pull,
+		'Value': GPIO.input(channel)
+	}
+	return jsonify({'GPIO': result})
+	
+# GPIO Output
+@app.route('/api/gpio/<int:channel>/<int:value>', methods=['GET'])
+def gpiooutput(channel, value):
+	if (value != 0 and value != 1):
+		abort(400)
+	
+	try:
+		GPIO.output(channel, value)
+		return jsonify({'result': True})
+	except Exception as e:
+		return jsonify({'result': False, 'exception': str(e)})
+
+# GPIO Input
+@app.route('/api/gpio/<int:channel>', methods=['GET'])
+def gpioinput(channel):
+
+	try:
+		value = GPIO.input(channel)
+		return jsonify({'result': True, 'value:': value})
+	except Exception as e:
+		return jsonify({'result': False, 'exception': str(e)})
+
+
+#=============================================
+		
 
 # Запуск Spigot-сервера
 @app.route('/api/minecraft/spigot')
@@ -225,7 +292,7 @@ def startmotion():
 @app.route('/api/motion/stop')
 def stopmotion():
 	os.system('sudo service motion stop')
-	return 'Stopped'
+	return jsonify({'result': True})
 
 # Проверка текущего состояния сервиса motion
 @app.route('/api/motion')
@@ -265,6 +332,9 @@ def upgrate():
 def getCPUtemperature():
 	res = os.popen('vcgencmd measure_temp').readline()
 	return(res.replace("temp=","").replace("'C\n",""))
+	
+def LoadBotsFromFile():
+	pass
 
 
 
@@ -273,4 +343,6 @@ def getCPUtemperature():
 
 
 if __name__ == '__main__':
+	LoadBotsFromFile()
+	GPIO.setmode(GPIO.BOARD)
 	app.run(debug=True, host='0.0.0.0', port = 5000) #port for testing
