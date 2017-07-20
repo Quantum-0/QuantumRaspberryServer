@@ -5,6 +5,9 @@ import psutil
 import socket
 import signal
 import RPi.GPIO as GPIO
+import csv
+import Adafruit_DHT
+import threading
 
 app = Flask(__name__)
 
@@ -36,12 +39,12 @@ def index_page(page):
 def get_content_for_control_panel(page):
 	return render_template(page + '.html')
 
-# ========================================== API ==========================================
+# ======================================== RESTful API ========================================
 
 # Корень
 @app.route('/api')
 def index_api():
-	return 'Quantum Raspberry Server - API v0.1'
+	return 'Quantum Raspberry Server - API v0.2'
 	
 # =================== Управление ботами ==================
 
@@ -51,7 +54,8 @@ bots = [
 		'name': 'Quantum Bot',
 		'path': '/home/pi/Autorun/Run/RaspberryUSBAndTelegram.exe',
 		'running': False,
-		'pid': -1
+		'pid': -1,
+		'autorun': False
 	}
 	,
 	{
@@ -59,7 +63,8 @@ bots = [
 		'name': 'Shurya Chat Bot',
 		'path': '/home/pi/Autorun/Run/ShuryaChatBot.exe',
 		'running': False,
-		'pid': -1
+		'pid': -1,
+		'autorun': True
 	}
 	,
 	{
@@ -67,9 +72,14 @@ bots = [
 		'name': 'Reminder Bot',
 		'path': '/home/pi/Autorun/Run/ReminderBot.exe',
 		'running': False,
-		'pid': -1
+		'pid': -1,
+		'autorun': False
 	}
 ]
+
+opened_pins = set()
+
+dhtdata = {'temp': 0, 'hum': 1}
 
 @app.route('/api/bots', methods=['GET'])
 def api_bots_list():
@@ -89,11 +99,13 @@ def api_add_bot():
 	bot = {
 		'id': bots[-1]['id'] + 1,
 		'name': request.json.get('name', ""),
+		'autorun': request.json.get('autorun', False),
 		'path': request.json['path'],
 		'pid': -1,
 		'running': False
 	}
 	bots.append(bot)
+	SaveBotsToFile()
 	return jsonify({'bot': bot}), 201
 
 @app.route('/api/bots/<int:bot_id>', methods=['DELETE'])
@@ -102,6 +114,7 @@ def delete_bot(bot_id):
 	if len(bot) == 0:
 		abort(404)
 	bots.remove(bot[0])
+	SaveBotsToFile()
 	return jsonify({'result': True})
 
 @app.route('/api/bots/run/<int:bot_id>', methods=['GET'])
@@ -114,10 +127,13 @@ def run_bot(bot_id):
 		return jsonify({'result': False})
 	else:
 		bot[0]['running'] = True
-		with open(bot[0]['path'] + "stdout.txt","wb") as out, open(bot[0]['path'] + "stderr.txt","wb") as err:
-			subproc = subprocess.Popen(["mono", bot[0]['path']], stdout=out, stderr=err)
-			bot[0]['pid'] = subproc.pid
+		_run_bot(bot[0])
 		return jsonify({'result': True})
+
+def _run_bot(bot):
+	with open(bot['path'] + "stdout.txt","wb") as out, open(bot['path'] + "stderr.txt","wb") as err:
+			subproc = subprocess.Popen(["mono", bot['path']], stdout=out, stderr=err)
+			bot['pid'] = subproc.pid
 
 @app.route('/api/bots/stop/<int:bot_id>', methods=['GET'])
 def stop_bot(bot_id):
@@ -144,8 +160,8 @@ def matrix(i):
 		os.system('sudo killall cmatrix')
 		os.system('sudo clear > /dev/tty1')
 	else:
-		return 'Error'
-	return 'Done'
+		abort(400)
+	return jsonify({'result': True})
 
 # =================== Выключение и перезагрузка ==================
 
@@ -162,6 +178,8 @@ def reboot():
 	return jsonify({'result': True}) #'Rebooting Raspberry Pi..'
 
 # =========================== GPIO ===========================
+	# GPIO.OUT = 0; GPIO.IN = 1
+	# GPIO.PUD_OFF = 20; GPIO.PUD_DOWN = 21; GPIO.PUD_UP = 22
 
 # GPIO Setup
 @app.route('/api/gpio/<int:channel>', methods=['POST'])
@@ -169,15 +187,9 @@ def gpiosetup(channel):
 	if not request.json or not 'Direction' in request.json or not 'Resistor' in request.json or not 'Value' in request.json:
 		abort(400)
 	
-	# GPIO.OUT = 0; GPIO.IN = 1
-	# GPIO.PUD_OFF = 20; GPIO.PUD_DOWN = 21; GPIO.PUD_UP = 22
 	dir = request.json['Direction']
 	pull = request.json['Resistor']
 	val = request.json['Value']
-	
-	print(dir)
-	print(pull)
-	print(val)
 	
 	if (dir == -1):
 		abort(400)
@@ -193,7 +205,8 @@ def gpiosetup(channel):
 		
 	if (dir == GPIO.OUT and val != -1):
 		GPIO.output(channel, val)
-		
+	
+	opened_pins.add(channel)
 	result = {
 		'Channel': channel,
 		'Direction': dir,
@@ -220,11 +233,50 @@ def gpioinput(channel):
 
 	try:
 		value = GPIO.input(channel)
-		return jsonify({'result': True, 'value:': value})
+		return jsonify({'result': True, 'value': value})
+	except Exception as e:
+		return jsonify({'result': False, 'exception': str(e)})
+		
+# GPIO Quick Setup
+@app.route('/api/gpio/setup/<int:channel>/<int:dir>', methods=['GET'])
+def gpioqsetup(channel, dir):
+
+	try:
+		GPIO.setup(channel, dir)
+		opened_pins.add(channel)
+		return jsonify({'result': True})
 	except Exception as e:
 		return jsonify({'result': False, 'exception': str(e)})
 
+# =========================== Stats ===========================
 
+@app.route('/api/stats', methods=['GET'])
+def stats():
+	vm = psutil.virtual_memory()	
+	
+	cpuusg = str(psutil.cpu_percent(interval=1))
+	cputemp = getCPUtemperature()
+	
+	memusd = vm.percent
+	memtotal = vm.total
+	
+	cpu = {
+		'usage': cpuusg,
+		'temperature': cputemp
+	}
+	mem = {
+		'used': memusd,
+		'total': memtotal
+	}
+	gpio = {pin: GPIO.input(pin) for pin in opened_pins}
+	stat = {
+		'external': dhtdata,
+		'memory': mem,
+		'cpu': cpu,
+		'gpio': gpio,
+	}
+	
+	return jsonify({'stats': stat})
 #=============================================
 		
 
@@ -334,15 +386,37 @@ def getCPUtemperature():
 	return(res.replace("temp=","").replace("'C\n",""))
 	
 def LoadBotsFromFile():
+	if (os.path.isfile("bots_data.txt")):
+		with open("bots_data.txt", "r") as f:
+			reader = csv.reader(f, delimiter="|")
+			bots = list(reader)
+	pass
+
+def SaveBotsToFile():
+	with open("bots_data.txt", "w") as f:
+		writer = csv.writer(f, delimiter="|")
+		writer.writerows(lines)
 	pass
 
 
-
-
+def updatedht():
+	humidity, temperature = Adafruit_DHT.read_retry(Adafruit_DHT.DHT22, 4)
+	dhtdata['hum'] = humidity
+	dhtdata['temp'] = temperature
+	threading.Timer(15.0, updatedht).start()
 
 
 
 if __name__ == '__main__':
 	LoadBotsFromFile()
-	GPIO.setmode(GPIO.BOARD)
+	
+	for bot in bots:
+		if (bot['running']):
+			bot['running'] = False;
+		if (bot['autorun']):
+			bot['running'] = True
+			_run_bot(bot)
+			
+	GPIO.setmode(GPIO.BCM)
+	updatedht()
 	app.run(debug=True, host='0.0.0.0', port = 5000) #port for testing
