@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, abort, render_template, request, redirect, url_for
+from flask import Flask, jsonify, abort, render_template, request, redirect, url_for, g, send_from_directory
 import subprocess
 import os
 import psutil
@@ -8,8 +8,27 @@ import RPi.GPIO as GPIO
 import csv
 import Adafruit_DHT
 import threading
+from collections import deque
+import datetime
+import telebot
+import my_token
 
 app = Flask(__name__)
+
+GPIO_LIGHT = 18
+GPIO_MOVEMENT = 17
+
+def after_this_request(func):
+    if not hasattr(g, 'call_after_request'):
+        g.call_after_request = []
+    g.call_after_request.append(func)
+    return func
+
+@app.after_request
+def per_request_callbacks(response):
+    for func in getattr(g, 'call_after_request', ()):
+        response = func(response)
+    return response
 
 # ===================================== WEB INTERFACE =====================================
 
@@ -44,7 +63,7 @@ def get_content_for_control_panel(page):
 # Корень
 @app.route('/api')
 def index_api():
-	return 'Quantum Raspberry Server - API v0.2'
+	return 'Quantum Raspberry Server - API v0.3'
 	
 # =================== Управление ботами ==================
 
@@ -76,10 +95,6 @@ bots = [
 		'autorun': False
 	}
 ]
-
-opened_pins = set()
-
-dhtdata = {'temp': 0, 'hum': 1}
 
 @app.route('/api/bots', methods=['GET'])
 def api_bots_list():
@@ -168,12 +183,22 @@ def matrix(i):
 # Выключение
 @app.route('/api/shutdown')
 def shutdown():
+	@after_this_request
+	def closescrypt(response):
+		exit()
+	GPIO.remove_event_detect(GPIO_MOVEMENT)
+	GPIO.cleanup()
 	os.system('sudo shutdown -h now &')
 	return jsonify({'result': True}) #'Shutdowning Raspberry Pi..'
 
 # Перезагрузка
 @app.route('/api/reboot')
 def reboot():
+	@after_this_request
+	def closescrypt(response):
+		exit()
+	GPIO.remove_event_detect(GPIO_MOVEMENT)
+	GPIO.cleanup()
 	os.system('sudo reboot &')
 	return jsonify({'result': True}) #'Rebooting Raspberry Pi..'
 
@@ -250,6 +275,9 @@ def gpioqsetup(channel, dir):
 
 # =========================== Stats ===========================
 
+opened_pins = set()
+dhtdata = {'temp': 0, 'hum': 0}
+
 @app.route('/api/stats', methods=['GET'])
 def stats():
 	vm = psutil.virtual_memory()	
@@ -277,8 +305,119 @@ def stats():
 	}
 	
 	return jsonify({'stats': stat})
-#=============================================
+	
+#=========================== High level control ======================
+
+light_settings = {
+	'time': False,
+	'time_on': datetime.time(hour=22, minute=30, second=0),
+	'time_off': datetime.time(hour=2, minute=0, second=0),
+	'movement': True,
+	'movement_delay': datetime.timedelta(hours=0, minutes=5),
+	'movement_from': datetime.time(hour=21, minute=0, second=0),
+	'movement_to': datetime.time(hour=3, minute=30, second=0),
+	'movement_turn_off_in': None,
+	'value': 0 #0 - auto, -1 - off, 1 - on
+}
+movements = deque()
+
+def halfminutetimer():
+	if (light_settings['time']):
+		is_between = time_between(light_settings['time_on'], light_settings['time_off'], datetime.datetime.now().time())
+		is_light = GPIO.input(GPIO_LIGHT) == GPIO.HIGH
+		if (not is_light and is_between):
+			GPIO.output(GPIO_LIGHT, True)
+		elif (is_light and not is_between):
+			GPIO.output(GPIO_LIGHT, False)
 		
+	if (light_settings['movement_turn_off_in'] != None):
+		if datetime.datetime.now() > light_settings['movement_turn_off_in']:
+			light_settings['movement_turn_off_in'] = None
+			GPIO.output(GPIO_LIGHT, False)
+			
+	threading.Timer(30.0, halfminutetimer).start()
+
+@app.route('/api/autolight', methods=['GET'])
+def get_autolight():
+	return jsonify({'settings': light_settings})
+
+@app.route('/api/light', methods=['GET'])
+def get_light():
+	try:
+		value = GPIO.input(GPIO_LIGHT)
+		return jsonify({'result': True, 'value': value})
+	except Exception as e:
+		return jsonify({'result': False, 'exception': str(e)})
+
+@app.route('/api/light/<int:value>', methods=['GET'])
+def set_light(value):
+	try:
+		GPIO.output(GPIO_LIGHT, value)
+		return jsonify({'result': True})
+	except Exception as e:
+		return jsonify({'result': False, 'exception': str(e)})
+
+@app.route('/api/movement/now', methods=['GET'])
+def get_now_movement():
+	try:
+		value = GPIO.input(GPIO_MOVEMENT)
+		return jsonify({'result': True, 'value': value})
+	except Exception as e:
+		return jsonify({'result': False, 'exception': str(e)})
+		
+@app.route('/api/movement', methods=['GET'])
+def get_movements():
+	return jsonify({'movements': list(movements)})
+
+def init_high_level_control():
+	GPIO.setup(GPIO_LIGHT, GPIO.OUT)
+	GPIO.setup(GPIO_MOVEMENT, GPIO.IN)
+	GPIO.add_event_detect(GPIO_MOVEMENT, GPIO.BOTH, bouncetime=350, callback=movement_changed_callback) 
+
+# у меня не получилось сделать глобальную переменную( поэтому будет такой костыль
+movementstart = {'value': None}
+def movement_changed_callback(channel):
+	if (GPIO.input(channel) == GPIO.HIGH):
+		movement_rising_callback(channel)
+	else:
+		movement_falling_callback(channel)
+def movement_rising_callback(channel):
+	movementstart['value'] = datetime.datetime.now()
+	if (light_settings['movement'] and time_between(light_settings['movement_from'], light_settings['movement_to'], datetime.datetime.now().time())):
+		GPIO.output(GPIO_LIGHT, GPIO.HIGH)	
+def movement_falling_callback(channel):
+	movements.append({'start': movementstart['value'].isoformat(' '), 'end': datetime.datetime.now().isoformat(' ')})
+	if (len(movements) > 64):
+		movements.popleft()
+	if (light_settings['movement'] and time_between(light_settings['movement_from'], light_settings['movement_to'], datetime.datetime.now().time())):
+		light_settings['movement_turn_off_in'] = datetime.datetime.now() + light_settings['movement_delay']
+		
+def time_between(From, To, current):
+	if (From < To):
+		return current > From and current < To
+	else:
+		return current > From or current < To
+
+# ====================== Light control via Telebot =====================
+
+bot = telebot.TeleBot(my_token.TELEBOT_TOKEN) 
+
+@bot.message_handler(commands=['light_on']) #content_types=["text"]
+def bot_light_on(message):
+	GPIO.output(GPIO_LIGHT, 1)
+	bot.send_message(message.chat.id, 'Свет включён')
+
+@bot.message_handler(commands=['light_off'])
+def bot_light_on(message):
+	GPIO.output(GPIO_LIGHT, 0)
+	bot.send_message(message.chat.id, 'Свет выключен')
+
+	
+	
+	
+	
+# ====================== Ниже не доделано ============================
+
 
 # Запуск Spigot-сервера
 @app.route('/api/minecraft/spigot')
@@ -405,18 +544,22 @@ def updatedht():
 	dhtdata['temp'] = temperature
 	threading.Timer(15.0, updatedht).start()
 
-
+	
+# ====================================== Main ========================================
 
 if __name__ == '__main__':
 	LoadBotsFromFile()
 	
-	for bot in bots:
-		if (bot['running']):
-			bot['running'] = False;
-		if (bot['autorun']):
-			bot['running'] = True
-			_run_bot(bot)
+	for b in bots:
+		if (b['running']):
+			b['running'] = False;
+		if (b['autorun']):
+			b['running'] = True
+			_run_bot(b)
 			
 	GPIO.setmode(GPIO.BCM)
+	init_high_level_control()
 	updatedht()
+	halfminutetimer()
+	bot.polling(none_stop=True)
 	app.run(debug=True, host='0.0.0.0', port = 5000) #port for testing
